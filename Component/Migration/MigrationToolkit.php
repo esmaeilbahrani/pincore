@@ -267,7 +267,9 @@ class MigrationToolkit
                 continue;
             }
 
-            $files[] = [
+            // Case-sensitive hosts may list the same migration from database/ and Database/;
+            // keep one entry per basename.
+            $files[$filename] = [
                 'file' => $filename,
                 'path' => $file->getRealPath(),
                 'sync' => false,
@@ -275,7 +277,7 @@ class MigrationToolkit
             ];
         }
 
-        return $this->sortFilesByTimestamp($files);
+        return $this->sortFilesByTimestamp(array_values($files));
     }
 
     /**
@@ -440,6 +442,12 @@ class MigrationToolkit
 
     private function migrationSearchPaths(): array
     {
+        if ($this->package === 'platform') {
+            $paths = SystemConfig::platformMigrationPaths();
+
+            return $paths !== [] ? $paths : (is_dir($this->migrationPath) ? [$this->migrationPath] : []);
+        }
+
         return is_dir($this->migrationPath) ? [$this->migrationPath] : [];
     }
 

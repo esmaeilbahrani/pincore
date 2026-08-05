@@ -57,6 +57,9 @@ class PinxBuildConfig
         return [
             'theme/*/dist',
             'theme/*/dist/**',
+            // Migrations must ship even when the app tree is partially gitignored.
+            'database/migrations',
+            'database/migrations/**',
         ];
     }
 

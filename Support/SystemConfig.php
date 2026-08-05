@@ -158,6 +158,8 @@ class SystemConfig
      * Resolve a platform resource directory (migrations, patches, seed).
      *
      * Uses the v3 pincore path first, then legacy system/ layout from older installs.
+     * Prefer the first existing candidate; for migrations see platformMigrationPaths()
+     * when multiple case-variant dirs may exist (Linux).
      */
     public static function platformPath(string $resource): string
     {
@@ -178,9 +180,31 @@ class SystemConfig
     }
 
     /**
+     * All existing platform migration directories (case-sensitive hosts may have both
+     * database/migrations and Database/migrations after a Mac→Linux deploy).
+     *
      * @return list<string>
      */
-    private static function platformPathCandidates(string $resource): array
+    public static function platformMigrationPaths(): array
+    {
+        $paths = [];
+
+        foreach (self::platformPathCandidates('migrations') as $candidate) {
+            if (!is_dir($candidate)) {
+                continue;
+            }
+
+            $real = realpath($candidate) ?: $candidate;
+            $paths[$real] = $candidate;
+        }
+
+        return array_values($paths);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function platformPathCandidates(string $resource): array
     {
         $root = self::rootPath();
         $core = self::corePath();
@@ -188,9 +212,13 @@ class SystemConfig
         return match ($resource) {
             'migrations' => [
                 self::path('platform_migrations'),
+                // Both casings: git historically mixed database/ vs Database/ on case-insensitive Macs.
                 $core . '/database/migrations',
+                $core . '/Database/migrations',
                 $root . '/vendor/pinoox/pincore/database/migrations',
+                $root . '/vendor/pinoox/pincore/Database/migrations',
                 $root . '/pincore/database/migrations',
+                $root . '/pincore/Database/migrations',
                 $root . '/system/database/migrations',
             ],
             'patches' => [
@@ -203,7 +231,9 @@ class SystemConfig
             'seed' => [
                 self::path('platform_seeders'),
                 $core . '/database/seeders',
+                $core . '/Database/seeders',
                 $root . '/vendor/pinoox/pincore/database/seeders',
+                $root . '/vendor/pinoox/pincore/Database/seeders',
                 $root . '/pincore/database/seeders',
                 $core . '/database/seed',
                 $root . '/vendor/pinoox/pincore/database/seed',
