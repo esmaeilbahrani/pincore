@@ -76,6 +76,90 @@ it('keeps env sensitive source files out of the cache', function () {
     expect(is_file($pinker->getBakedFile()))->toBeFalse();
 });
 
+it('keeps env-sensitive pinker overrides when source is newer and env keys are absent', function () {
+    $appsRoot = pinkerTestAppsRoot();
+    $package = 'com_test_pinker';
+    $appDir = $appsRoot . '/' . $package;
+
+    if (!is_dir($appDir)) {
+        mkdir($appDir, 0777, true);
+    }
+
+    $source = $appDir . '/database.config.php';
+    file_put_contents($source, <<<'PHP'
+<?php
+
+return [
+    'default' => env('DB_CONNECTION', 'mysql'),
+    'connections' => [
+        'mysql' => [
+            'driver' => 'mysql',
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'database' => env('DB_DATABASE', 'pinoox'),
+            'username' => env('DB_USERNAME', 'root'),
+            'password' => env('DB_PASSWORD', ''),
+        ],
+    ],
+];
+PHP);
+
+    $pinker = Pinker::folder($appDir, 'database.config.php');
+    $overrideFile = $pinker->getOverrideFile();
+    expect($overrideFile)->not->toBeNull();
+
+    $overrideDir = dirname((string) $overrideFile);
+    if (!is_dir($overrideDir)) {
+        mkdir($overrideDir, 0777, true);
+    }
+
+    $updatedAt = time() - 3600;
+    file_put_contents((string) $overrideFile, '<?php return ' . var_export([
+        '__pinker_override__' => true,
+        'schema' => 1,
+        'data' => [
+            'default' => 'mysql',
+            'connections.mysql.host' => 'pinker-host',
+            'connections.mysql.database' => 'pin',
+            'connections.mysql.username' => 'orbit_user',
+            'connections.mysql.password' => 'secret',
+        ],
+        'remove' => [],
+        'info' => [
+            'source' => $source,
+            'updated_at' => $updatedAt,
+            'env_sensitive' => 'yes',
+            'env_priority' => 'env-over-pinker',
+        ],
+    ], true) . ';');
+
+    putenv('APP_ENV=production');
+    $_ENV['APP_ENV'] = 'production';
+    $_SERVER['APP_ENV'] = 'production';
+    foreach (['DB_HOST', 'DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_CONNECTION'] as $key) {
+        putenv($key);
+        unset($_ENV[$key], $_SERVER[$key]);
+    }
+
+    // Simulate vendor upgrade: source mtime newer than pinker override.
+    touch($source, time() + 120);
+    clearstatcache(true, $source);
+
+    try {
+        $picked = Pinker::folder($appDir, 'database.config.php')->pickup();
+
+        expect($picked['connections']['mysql']['host'] ?? null)->toBe('pinker-host')
+            ->and($picked['connections']['mysql']['database'] ?? null)->toBe('pin')
+            ->and($picked['connections']['mysql']['username'] ?? null)->toBe('orbit_user')
+            ->and(is_file((string) $overrideFile))->toBeTrue();
+
+        $override = include $overrideFile;
+        expect($override['data']['connections.mysql.host'] ?? null)->toBe('pinker-host');
+    } finally {
+        putenv('APP_ENV');
+        unset($_ENV['APP_ENV'], $_SERVER['APP_ENV']);
+    }
+});
+
 it('does not persist runtime defaults absent from source on bake', function () {
     $appsRoot = pinkerTestAppsRoot();
     $package = 'com_test_pinker';

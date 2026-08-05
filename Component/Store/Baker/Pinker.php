@@ -638,11 +638,20 @@ class Pinker
             return false;
         }
 
+        // database.config.php (and other env-sensitive sources) always evaluate
+        // env('KEY', default) into the array. A newer vendor source must NOT
+        // prune pinker-stored credentials — that made pinx install fall back to
+        // root@localhost / pinoox when .env was absent. Defined env keys still
+        // win via EnvSensitiveConfig::shouldSkipPinkerPath().
+        if ($this->isSourceEnvSensitive()) {
+            return false;
+        }
+
         if ($this->sourceChangedPaths !== null) {
             return $this->pathChangedInSource($path, $this->sourceChangedPaths);
         }
 
-        return $this->isSourceEnvSensitive();
+        return false;
     }
 
     /**
