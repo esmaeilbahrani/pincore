@@ -570,20 +570,26 @@ class Migrator
 
                 try {
                     $this->log("Executing migration: {$migrationName}");
-                    
+
                     // Keep package context for the full up() — $this->table() resolves
                     // via PackageContext::runtime(); clearing before up() falls back to
                     // App::package() (often installer) and corrupts logical table names.
                     MigrationBase::usePackage($this->package);
                     $migrationInstance = require $migration['migrationFile'];
+                    if (is_object($migrationInstance) && method_exists($migrationInstance, 'bindPackage')) {
+                        $migrationInstance->bindPackage($this->package);
+                    }
+
+                    $this->assertReadyToRun($migration);
                     $migrationInstance->up();
-                    
-                    // Record that this migration has been run
+                    $this->assertApplied($migration);
+
+                    // Record only after schema checks pass — silent no-ops must not land in history.
                     $this->recordMigration($migrationName);
-                    
+
                     $executed[] = $migrationName;
                     $this->log("Successfully executed migration: {$migrationName}");
-                    
+
                 } catch (Exception $e) {
                     if ($e instanceof QueryException && $this->isTableAlreadyExistsError($e)) {
                         $this->log("Table already exists, adopting migration: {$migrationName}", 'warning');
@@ -627,14 +633,20 @@ class Migrator
         $recorded = $this->hasBeenRun($migrationName) || !empty($migration['sync']);
         $tableExists = $this->targetTableExists($migration);
 
-        if ($recorded && $tableExists) {
+        if ($recorded) {
+            // Create: history alone is not enough if the table disappeared.
+            if (MigrationName::isCreate($migrationName)) {
+                return $tableExists;
+            }
+
+            // Alter/add/ensure: trust history. Column drift needs ensure_* migrations.
             return true;
         }
 
         // Only auto-adopt create_* migrations when the table already exists.
         // Alter/add/unique migrations must still run — the base table existing
         // does not mean the migration's changes were applied.
-        if (!$recorded && $tableExists && $this->isCreateMigration($migrationName)) {
+        if ($tableExists && MigrationName::isCreate($migrationName)) {
             return $this->adoptExistingMigration($migrationName);
         }
 
@@ -643,9 +655,111 @@ class Migrator
 
     private function isCreateMigration(string $migrationName): bool
     {
-        $clean = preg_replace('/^\d{4}_\d{2}_\d{2}_\d{6}_/', '', $migrationName) ?? $migrationName;
+        return MigrationName::isCreate($migrationName);
+    }
 
-        return str_starts_with($clean, 'create_');
+    /**
+     * @param array<string, mixed> $migration
+     */
+    private function assertReadyToRun(array $migration): void
+    {
+        $migrationName = (string) ($migration['fileName'] ?? '');
+        if ($migrationName === '' || !MigrationName::requiresExistingTable($migrationName)) {
+            return;
+        }
+
+        $table = $this->resolveMigrationTable($migration);
+        if ($table === null) {
+            return;
+        }
+
+        if ($this->schemaHasTable($table, $this->package)) {
+            return;
+        }
+
+        throw new Exception(sprintf(
+            "Cannot run %s: target table '%s' does not exist for package '%s'. Run create migrations first.",
+            $migrationName,
+            $table,
+            $this->package,
+        ));
+    }
+
+    /**
+     * @param array<string, mixed> $migration
+     */
+    private function assertApplied(array $migration): void
+    {
+        $migrationName = (string) ($migration['fileName'] ?? '');
+        if ($migrationName === '') {
+            return;
+        }
+
+        $table = $this->resolveMigrationTable($migration);
+
+        if (MigrationName::isCreate($migrationName)) {
+            if ($table === null) {
+                return;
+            }
+
+            if ($this->schemaHasTable($table, $this->package)) {
+                return;
+            }
+
+            throw new Exception(sprintf(
+                "Create migration %s finished but table '%s' is still missing for package '%s'.",
+                $migrationName,
+                $table,
+                $this->package,
+            ));
+        }
+
+        if ($table === null || !MigrationName::requiresExistingTable($migrationName)) {
+            return;
+        }
+
+        if (!$this->schemaHasTable($table, $this->package)) {
+            throw new Exception(sprintf(
+                "Migration %s finished but target table '%s' is missing for package '%s'.",
+                $migrationName,
+                $table,
+                $this->package,
+            ));
+        }
+
+        $columns = MigrationName::addedColumns($migrationName);
+        if ($columns === null) {
+            return;
+        }
+
+        foreach ($columns as $column) {
+            if ($this->schemaHasColumn($table, $column, $this->package)) {
+                continue;
+            }
+
+            throw new Exception(sprintf(
+                "Migration %s finished but column '%s' is missing on table '%s' (package '%s').",
+                $migrationName,
+                $column,
+                $table,
+                $this->package,
+            ));
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $migration
+     */
+    private function resolveMigrationTable(array $migration): ?string
+    {
+        $table = $migration['tableName'] ?? null;
+        if (is_string($table) && $table !== '') {
+            return $table;
+        }
+
+        $fileName = (string) ($migration['fileName'] ?? '');
+
+        return $fileName !== '' ? MigrationName::tableName($fileName) : null;
     }
 
     private function adoptExistingMigration(string $migrationName): bool
@@ -693,10 +807,12 @@ class Migrator
             return $this->schemaHasTable(Table::ROLE, $this->package);
         }
 
-        $table = $migration['tableName'] ?? null;
+        $table = $this->resolveMigrationTable($migration);
 
-        if (!is_string($table) || $table === '') {
-            return true;
+        if ($table === null) {
+            // Unknown naming — do not pretend the table exists for create re-run checks.
+            // Alter skip uses history alone (see shouldSkipMigrationExecution).
+            return false;
         }
 
         return $this->schemaHasTable($table, $this->package);
@@ -740,6 +856,33 @@ class Migrator
             return $row !== null;
         } catch (Exception $e) {
             $this->log('Error checking table ' . $table . ': ' . $e->getMessage(), 'warning');
+
+            return false;
+        }
+    }
+
+    private function schemaHasColumn(string $table, string $column, ?string $package = null): bool
+    {
+        try {
+            $package ??= $this->package;
+            $connection = $package === 'platform'
+                ? 'platform'
+                : DB::connectionNameForPackage($package);
+            $conn = DB::connection($connection);
+            $physical = DB::physicalTableName($table, $package);
+            $prefix = (string) $conn->getTablePrefix();
+            $logical = $physical;
+
+            if ($prefix !== '' && str_starts_with($physical, $prefix)) {
+                $logical = substr($physical, strlen($prefix));
+            }
+
+            return DB::schema($connection)->hasColumn($logical, $column);
+        } catch (Exception $e) {
+            $this->log(
+                "Error checking column {$column} on {$table}: " . $e->getMessage(),
+                'warning',
+            );
 
             return false;
         }
@@ -838,10 +981,15 @@ class Migrator
                 throw new Exception("Migration {$migration['fileName']} does not have a valid 'up' method");
             }
 
-            // Execute the migration
-            $migrationClass->up();
+            if (method_exists($migrationClass, 'bindPackage')) {
+                $migrationClass->bindPackage($this->package);
+            }
 
-            // Only record the migration if it was successful
+            $this->assertReadyToRun($migration);
+            $migrationClass->up();
+            $this->assertApplied($migration);
+
+            // Only record the migration if schema checks passed
             MigrationQuery::insert($migration['fileName'], $migration['packageName'], $batch);
 
             $executionTime = microtime(true) - $startTime;

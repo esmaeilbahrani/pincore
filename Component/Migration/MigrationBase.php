@@ -19,10 +19,13 @@ use Illuminate\Contracts\Database\Query\Expression;
 use Pinoox\Component\Database\Seeder\SeederRunner;
 use Pinoox\Portal\Database\DB;
 use Pinoox\Support\PackageContext;
+use RuntimeException;
 
 class MigrationBase extends Migration
 {
     public Builder $schema;
+
+    protected ?string $package = null;
 
     public static function usePackage(?string $package): void
     {
@@ -31,19 +34,56 @@ class MigrationBase extends Migration
 
     public function __construct(?string $package = null)
     {
-        $package = PackageContext::resolve($package);
-        $this->schema = DB::schema(DB::connectionNameForPackage($package));
-        $this->schema->blueprintResolver(fn($table, $callback, $prefix) => new MigrationBlueprint($table, $callback, $prefix));
+        $this->bindPackage($package ?? PackageContext::resolve());
+    }
+
+    /**
+     * Force schema + PackageContext onto the install target package.
+     *
+     * PinGate may run while App::package() is installer/manager; without an
+     * explicit bind, hasTable/hasColumn can hit the wrong connection/prefix.
+     */
+    public function bindPackage(string $package): static
+    {
+        $this->package = PackageContext::resolve($package);
+        PackageContext::use($this->package);
+        $this->schema = DB::schema(DB::connectionNameForPackage($this->package));
+        $this->schema->blueprintResolver(
+            fn ($table, $callback, $prefix) => new MigrationBlueprint($table, $callback, $prefix),
+        );
+
+        return $this;
+    }
+
+    public function packageName(): ?string
+    {
+        return $this->package;
+    }
+
+    /**
+     * Fail loudly when the logical table is missing (prefer over silent return).
+     */
+    protected function requireTable(string $logical): void
+    {
+        if ($this->schema->hasTable($logical)) {
+            return;
+        }
+
+        throw new RuntimeException(sprintf(
+            'Migration requires table [%s] for package [%s], but it does not exist.',
+            $logical,
+            $this->package ?? PackageContext::resolve(),
+        ));
     }
 
     protected function table(string $name, ?string $package = null): string
     {
-        return DB::tableName($name, $package ?? PackageContext::resolve());
+        return DB::tableName($name, $package ?? $this->package ?? PackageContext::resolve());
     }
 
     protected function foreignTable(string $name, ?string $package = null): Expression
     {
-        return DB::raw(DB::physicalTableName($name, $package ?? PackageContext::resolve()));
+        return DB::raw(DB::physicalTableName($name, $package ?? $this->package ?? PackageContext::resolve()));
     }
 
     /**
@@ -53,7 +93,7 @@ class MigrationBase extends Migration
      */
     protected function seed(string|array $name, ?string $package = null): void
     {
-        (new SeederRunner())->run($name, $package);
+        (new SeederRunner())->run($name, $package ?? $this->package);
     }
 
     /**
@@ -61,7 +101,6 @@ class MigrationBase extends Migration
      */
     protected function seedAll(?string $package = null): void
     {
-        (new SeederRunner())->runAll($package);
+        (new SeederRunner())->runAll($package ?? $this->package);
     }
-
 }

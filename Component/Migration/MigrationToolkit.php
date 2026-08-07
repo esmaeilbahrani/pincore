@@ -38,23 +38,7 @@ class MigrationToolkit
 
     // Constants for patterns
 
-    private const TIMESTAMP_PATTERN = '/^\d{4}_\d{2}_\d{2}_\d{6}_/';
-
     private const MIGRATION_FILENAME_PATTERN = '/(\d{4}_\d{2}_\d{2}_\d{6})/';
-
-    // Table name extraction patterns (order matters - more specific patterns first)
-
-    private const TABLE_NAME_PATTERNS = [
-        'create_table' => '/^create_(.+)_table$/',
-        'drop_table' => '/^drop_(.+)_table$/',
-        'alter_table' => '/^alter_(.+)_table$/',
-        'add_to' => '/^add_.+_to_(.+)$/',
-        'drop_from' => '/^drop_.+_from_(.+)$/',
-        'remove_from' => '/^remove_.+_from_(.+)$/',
-        'modify_in' => '/^modify_.+_in_(.+)$/',
-        'update_in' => '/^update_.+_in_(.+)$/',
-        'rename_in' => '/^rename_.+_in_(.+)$/',
-    ];
 
     private Builder $schema;
     private string $package = '';
@@ -407,25 +391,7 @@ class MigrationToolkit
      */
     private function extractTableName(string $fileName): ?string
     {
-        // Remove timestamp prefix
-        $cleanFileName = preg_replace(self::TIMESTAMP_PATTERN, '', $fileName);
-
-        // Try each pattern until we find a match
-        foreach (self::TABLE_NAME_PATTERNS as $patternName => $pattern) {
-            if (preg_match($pattern, $cleanFileName, $matches)) {
-                $name = $matches[1];
-                // add_*_to_foo_table captures "foo_table"; normalize to logical "foo"
-                if (str_ends_with($name, '_table')) {
-                    $name = substr($name, 0, -6);
-                }
-
-                return $name !== '' ? $name : null;
-            }
-        }
-
-        // Unknown naming (e.g. unique_label_name_per_project) — null means
-        // Migrator treats the target as present when history already recorded.
-        return null;
+        return MigrationName::tableName($fileName);
     }
 
     /**
