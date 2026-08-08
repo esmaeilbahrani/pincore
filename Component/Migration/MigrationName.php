@@ -25,6 +25,8 @@ final class MigrationName
     /** @var array<string, string> */
     private const TABLE_NAME_PATTERNS = [
         'create_table' => '/^create_(.+)_table$/',
+        // Plural form used when one migration creates multiple related tables
+        'create_tables' => '/^create_(.+)_tables$/',
         'drop_table' => '/^drop_(.+)_table$/',
         'alter_table' => '/^alter_(.+)_table$/',
         'add_to' => '/^add_.+_to_(.+)$/',

@@ -17,6 +17,7 @@ it('extracts logical table names from common patterns', function () {
         ->and(MigrationName::tableName('2026_08_04_000002_add_chat_fields_to_task_comments_table'))->toBe('task_comments')
         ->and(MigrationName::tableName('2026_08_04_000003_add_description_to_task_attachments_table'))->toBe('task_attachments')
         ->and(MigrationName::tableName('2026_08_07_000004_ensure_chat_fields_on_task_comments'))->toBe('task_comments')
+        ->and(MigrationName::tableName('2026_08_08_000001_create_custom_fields_tables'))->toBe('custom_fields')
         ->and(MigrationName::tableName('2026_08_03_000012_unique_label_name_per_project'))->toBeNull();
 });
 
