@@ -341,7 +341,7 @@ class DevelopmentServer
             $env['PHP_CLI_SERVER_WORKERS'] = (string) $workers;
         } elseif (PHP_OS_FAMILY !== 'Windows' && (!isset($env['PHP_CLI_SERVER_WORKERS']) || $env['PHP_CLI_SERVER_WORKERS'] === '')) {
             // On Unix platforms (Linux, macOS, WSL) default to 4 workers to handle concurrent requests
-            $env['PHP_CLI_SERVER_WORKERS'] = '4';
+            $env['PHP_CLI_SERVER_WORKERS'] = '8';
         }
 
         if (!$this->hasExplicitViteHmrEnv($env)) {
@@ -530,7 +530,7 @@ class DevelopmentServer
         if ($workers !== null && is_numeric($workers) && (int) $workers > 0) {
             $env['PHP_CLI_SERVER_WORKERS'] = (string) $workers;
         } elseif (PHP_OS_FAMILY !== 'Windows' && (!isset($env['PHP_CLI_SERVER_WORKERS']) || $env['PHP_CLI_SERVER_WORKERS'] === '')) {
-            $env['PHP_CLI_SERVER_WORKERS'] = '4';
+            $env['PHP_CLI_SERVER_WORKERS'] = '8';
         }
 
         return $env;
